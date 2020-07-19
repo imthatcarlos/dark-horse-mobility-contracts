@@ -1,0 +1,20 @@
+{
+  "name": "mobility-marketplace-contracts",
+  "version": "0.1.0",
+  "main": "truffle.js",
+  "private": false,
+  "dependencies": {
+    "@truffle/contract": "^4.1.15",
+    "dotenv": "^8.2.0",
+    "web3": "1.2.2",
+    "web3-provider-engine": "^15.0.6"
+  },
+  "scripts": {
+    "ganache": "ganache-cli"
+  },
+  "devDependencies": {
+    "@openzeppelin/contracts": "^3.0.0-rc.1",
+    "@truffle/hdwallet-provider": "^1.0.34",
+    "ganache-cli": "^6.9.1"
+  }
+}
