@@ -16,10 +16,10 @@ contract MobilityCampaigns {
     string organization;
     string category;
     string title;
-    string description;
-    string ipfsLink;
+    string ipfsHash;
     uint budgetWei;
     uint createdAt;     // datetime created
+    uint expiresAt;     // datetime when no longer valid
     bool isActive;      // set to false when no longer active
   }
 
@@ -63,11 +63,10 @@ contract MobilityCampaigns {
       organization: '',
       category: '',
       title: '',
-      description: '',
-      ipfsLink: '',
+      ipfsHash: '',
       budgetWei: 0,
-      redeemWei: 0,
       createdAt: 0,
+      expiresAt: 0,
       isActive: false
     }));
   }
@@ -80,9 +79,19 @@ contract MobilityCampaigns {
   }
 
   // creator must send info + ETH
-  function createCampaign() public payable noActiveCampaign {
+  function createCampaign(
+    string memory organization,
+    string memory category,
+    string memory title,
+    string memory ipfsHash
+  ) public
+    payable
+    noActiveCampaign
+  {
     // assert budget
+
     // create record in storage, update lookup arrays
+
     // allocate budget accordingly
   }
 
@@ -100,8 +109,6 @@ contract MobilityCampaigns {
       string memory organization,
       string memory category,
       string memory title,
-      string memory description,
-      string memory ipfsLink,
       uint budgetWei,
       uint createdAt
     )
@@ -110,24 +117,18 @@ contract MobilityCampaigns {
     organization = campaign.organization;
     category = campaign.category;
     title = campaign.title;
-    description = campaign.description;
-    ipfsLink = campaign.ipfsLink;
     budgetWei = campaign.budgetWei;
     createdAt = campaign.createdAt;
   }
 
-  // return active campaigns for users
-  function getCampaignsUsers()
+  // return active campaign for owners
+  function getActiveCampaignIdsUsers()
     external
     view
     onlyCampaignReceivers
-    returns(
-      string memory title,
-      string memory description,
-      string memory ipfsLink
-    )
+    returns(uint[] memory)
   {
-
+    return activeCampaigns;
   }
 
   // return active campaigns
@@ -149,11 +150,6 @@ contract MobilityCampaigns {
     createdAt = campaign.createdAt;
   }
 
-  // return campaign record
-  function _getCampaign(uint idx) internal {
-
-  }
-
   // make a campaign inactive
   function _removeActiveCampaignAt(uint _idx) internal returns(bool) {
     require(_idx < activeCampaigns.length, 'out of range exception - _idx');
@@ -163,7 +159,6 @@ contract MobilityCampaigns {
     campaigns[activeCampaigns[_idx]].isActive = false;
     activeCampaigns[_idx] = activeCampaigns[activeCampaigns.length - 1];
     delete activeCampaigns[activeCampaigns.length - 1];
-    activeCampaigns.length--;
 
     return true;
   }
