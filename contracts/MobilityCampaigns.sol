@@ -11,6 +11,8 @@ import "@openzeppelin/contracts/math/SafeMath.sol";
 contract MobilityCampaigns {
   using SafeMath for uint256;
 
+  event CampaignCreated(address indexed owner, string indexed organization, string title);
+
   struct Campaign {
     address creator;      // the address of the creator
     string organization;
@@ -29,6 +31,9 @@ contract MobilityCampaigns {
   mapping(address => bool) public dataProviders; // mapping of accounts that share data
   mapping(address => bool) public campaignReceivers; // mapping of accounts that receive campaigns
   mapping(address => uint) public activeCampaignOwners; // mapping of accounts that own campaigns (idx to activeCampaigns)
+
+  uint public totalCampaignReceivers;
+  uint public totalDataProviders;
 
   modifier onlyGraphIndexer() {
     require(msg.sender == graphIndexer, "msg.sender must be graphIndexer");
@@ -53,9 +58,12 @@ contract MobilityCampaigns {
   /**
    * Contract constructor
    */
-  constructor(address _graphIndexer) public {
+  constructor() public {
     // indexing service The Graph
-    graphIndexer = _graphIndexer;
+    // graphIndexer = _graphIndexer;
+
+    totalCampaignReceivers = 0;
+    totalDataProviders = 0;
 
     // take care of zero-index for storage array
     campaigns.push(Campaign({
@@ -80,24 +88,47 @@ contract MobilityCampaigns {
 
   // creator must send info + ETH
   function createCampaign(
-    string memory organization,
-    string memory category,
-    string memory title,
-    string memory ipfsHash
+    string memory _organization,
+    string memory _category,
+    string memory _title,
+    string memory _ipfsHash
   ) public
     payable
     noActiveCampaign
   {
     // assert budget
+    require(msg.value > 0, "value must be greater than 0");
+
+    // @TODO: allocate budget accordingly
+    // @TODO: set expiredAt
 
     // create record in storage, update lookup arrays
-
-    // allocate budget accordingly
+    _createCampaignRecord(
+      _organization,
+      _category,
+      _title,
+      _ipfsHash
+    );
   }
 
   function toggleReceiveCampaign(bool _shouldReceive) external {
     require(campaignReceivers[msg.sender] != _shouldReceive, 'option for _shouldReceive already set');
     campaignReceivers[msg.sender] = _shouldReceive;
+    if (_shouldReceive) {
+      totalCampaignReceivers = totalCampaignReceivers + 1;
+    } else {
+      totalCampaignReceivers = totalCampaignReceivers - 1;
+    }
+  }
+
+  function toggleProvideData(bool _shouldProvide) external {
+    require(dataProviders[msg.sender] != _shouldProvide, 'option for _shouldProvide already set');
+    dataProviders[msg.sender] = _shouldProvide;
+    if (_shouldProvide) {
+      totalDataProviders = totalDataProviders + 1;
+    } else {
+      totalDataProviders = totalDataProviders - 1;
+    }
   }
 
   // return active campaign for owners
@@ -148,6 +179,37 @@ contract MobilityCampaigns {
     category = campaign.category;
     title = campaign.title;
     createdAt = campaign.createdAt;
+  }
+
+  /**
+   * Creates a record for the token exchange
+   */
+  function _createCampaignRecord(
+    string memory _organization,
+    string memory _category,
+    string memory _title,
+    string memory _ipfsHash
+  )
+    internal
+  {
+    Campaign memory c = Campaign({
+      creator: msg.sender,
+      organization: _organization,
+      category: _category,
+      title: _title,
+      ipfsHash: _ipfsHash,
+      budgetWei: msg.value,
+      createdAt: block.timestamp, // solium-disable-line security/no-block-members, whitespace
+      expiresAt: 0, // @TODO:
+      isActive: true
+    });
+
+    // add to storage and lookup
+    campaigns.push(c);
+    activeCampaigns.push(campaigns.length - 1);
+    activeCampaignOwners[msg.sender] = activeCampaigns.length;
+
+    emit CampaignCreated(msg.sender, _organization, _title);
   }
 
   // make a campaign inactive
