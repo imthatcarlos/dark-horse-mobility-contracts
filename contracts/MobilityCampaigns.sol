@@ -116,6 +116,14 @@ contract MobilityCampaigns {
     );
   }
 
+  function getReceiveCampaign(address _a) public view returns (bool) {
+    return campaignReceivers[_a];
+  }
+
+  function getProvideData(address _a) public view returns (bool) {
+    return dataProviders[_a];
+  }
+
   function toggleReceiveCampaign(bool _shouldReceive) external {
     require(campaignReceivers[msg.sender] != _shouldReceive, 'option for _shouldReceive already set');
     campaignReceivers[msg.sender] = _shouldReceive;
@@ -145,18 +153,23 @@ contract MobilityCampaigns {
       string memory organization,
       string memory category,
       string memory title,
+      string memory ipfsHash,
       uint budgetWei,
       uint createdAt
     )
   {
-    Campaign storage campaign = campaigns[activeCampaigns[activeCampaignOwners[msg.sender]]];
+    Campaign storage campaign = campaigns[activeCampaignOwners[msg.sender]];
     organization = campaign.organization;
     category = campaign.category;
     title = campaign.title;
+    ipfsHash = campaign.ipfsHash;
     budgetWei = campaign.budgetWei;
     createdAt = campaign.createdAt;
   }
 
+  /*
+   * @TODO: _payouts param is set from indexer reading trips where campaign.createdAt < trip.endAt < campaign.expiredAt
+   */
   function completeCampaign(address[] calldata _payouts)
     external
     onlyActiveCampaignOwners
@@ -258,7 +271,8 @@ contract MobilityCampaigns {
   )
     internal
   {
-    Campaign memory c = Campaign({
+    // add to storage and lookup
+    campaigns.push(Campaign({
       creator: msg.sender,
       organization: _organization,
       category: _category,
@@ -269,12 +283,9 @@ contract MobilityCampaigns {
       expiresAt: 0, // @TODO:
       isActive: true,
       campaignThreadId: ''
-    });
-
-    // add to storage and lookup
-    campaigns.push(c);
+    }));
     activeCampaigns.push(campaigns.length - 1);
-    activeCampaignOwners[msg.sender] = activeCampaigns.length;
+    activeCampaignOwners[msg.sender] = campaigns.length - 1;
 
     emit CampaignCreated(msg.sender, _organization, _title);
   }
