@@ -1,6 +1,6 @@
 pragma solidity ^0.6.0;
 
-import "@openzeppelin/contracts/math/SafeMath.sol";
+import '@openzeppelin/contracts/math/SafeMath.sol';
 
 /**
  * @title Babylon
@@ -12,6 +12,8 @@ contract MobilityCampaigns {
   using SafeMath for uint256;
 
   event CampaignCreated(address indexed owner, string indexed organization, string title);
+  event CampaignCompleted(address owner, uint indexed campaignId);
+  event CampaignResultsReleased(uint indexed campaignId, string threadId);
 
   struct Campaign {
     address creator;      // the address of the creator
@@ -20,9 +22,10 @@ contract MobilityCampaigns {
     string title;
     string ipfsHash;
     uint budgetWei;
-    uint createdAt;     // datetime created
-    uint expiresAt;     // datetime when no longer valid
-    bool isActive;      // set to false when no longer active
+    uint createdAt;          // datetime created
+    uint expiresAt;          // datetime when no longer valid
+    bool isActive;           // set to false when no longer active
+    string campaignThreadId; // results of campaign only accessible to the creator
   }
 
   address public graphIndexer;
@@ -31,12 +34,13 @@ contract MobilityCampaigns {
   mapping(address => bool) public dataProviders; // mapping of accounts that share data
   mapping(address => bool) public campaignReceivers; // mapping of accounts that receive campaigns
   mapping(address => uint) public activeCampaignOwners; // mapping of accounts that own campaigns (idx to activeCampaigns)
+  mapping(uint => address[]) private campaignPayouts; // mapping of accounts that receive campaigns
 
   uint public totalCampaignReceivers;
   uint public totalDataProviders;
 
   modifier onlyGraphIndexer() {
-    require(msg.sender == graphIndexer, "msg.sender must be graphIndexer");
+    require(msg.sender == graphIndexer, 'msg.sender must be graphIndexer');
     _;
   }
 
@@ -75,7 +79,8 @@ contract MobilityCampaigns {
       budgetWei: 0,
       createdAt: 0,
       expiresAt: 0,
-      isActive: false
+      isActive: false,
+      campaignThreadId: ''
     }));
   }
 
@@ -83,7 +88,7 @@ contract MobilityCampaigns {
    * Do not accept ETH
    */
   receive() external payable {
-    require(msg.sender == address(0), "not accepting ETH");
+    require(msg.sender == address(0), 'not accepting ETH');
   }
 
   // creator must send info + ETH
@@ -97,7 +102,7 @@ contract MobilityCampaigns {
     noActiveCampaign
   {
     // assert budget
-    require(msg.value > 0, "value must be greater than 0");
+    require(msg.value > 0, 'value must be greater than 0');
 
     // @TODO: allocate budget accordingly
     // @TODO: set expiredAt
@@ -152,7 +157,48 @@ contract MobilityCampaigns {
     createdAt = campaign.createdAt;
   }
 
-  // return active campaign for owners
+  function completeCampaign(address[] calldata _payouts)
+    external
+    onlyActiveCampaignOwners
+    returns (uint)
+  {
+    require(_payouts.length > 0, 'array param _payouts cannot be empty');
+
+    campaignPayouts[activeCampaignOwners[msg.sender]] = _payouts;
+    campaigns[activeCampaignOwners[msg.sender]].isActive = false;
+
+    emit CampaignCompleted(msg.sender, activeCampaignOwners[msg.sender]);
+
+    return activeCampaignOwners[msg.sender];
+  }
+
+  function setCampaignResultsThread(uint _id, string memory _thread)
+    public
+    onlyGraphIndexer
+  {
+    // sanity check
+    require(campaigns[_id].isActive == false, 'campaign must be completed');
+    require(bytes(campaigns[_id].campaignThreadId).length == 0, 'campaignThreadId must not be already set');
+
+    campaigns[_id].campaignThreadId = _thread;
+
+    emit CampaignResultsReleased(_id, _thread);
+  }
+
+  function getCampaignResults(uint _id)
+    external
+    view
+    returns (string memory)
+  {
+    Campaign storage campaign = campaigns[_id];
+
+    require(campaign.creator == msg.sender, 'only campaign owner can view results');
+    require(campaign.isActive == false, 'campaign must be completed');
+
+    return campaign.campaignThreadId;
+  }
+
+  // return active campaign ids for receivers
   function getActiveCampaignIdsUsers()
     external
     view
@@ -160,6 +206,26 @@ contract MobilityCampaigns {
     returns(uint[] memory)
   {
     return activeCampaigns;
+  }
+
+
+  // return campaign for owners
+  function getActiveCampaignUsers(uint _id)
+    external
+    view
+    onlyCampaignReceivers
+    returns(
+      string memory organization,
+      string memory category,
+      string memory title,
+      string memory ipfsHash
+    )
+  {
+    Campaign storage campaign = campaigns[_id];
+    organization = campaign.organization;
+    category = campaign.category;
+    title = campaign.title;
+    ipfsHash = campaign.ipfsHash;
   }
 
   // return active campaigns
@@ -201,7 +267,8 @@ contract MobilityCampaigns {
       budgetWei: msg.value,
       createdAt: block.timestamp, // solium-disable-line security/no-block-members, whitespace
       expiresAt: 0, // @TODO:
-      isActive: true
+      isActive: true,
+      campaignThreadId: ''
     });
 
     // add to storage and lookup
