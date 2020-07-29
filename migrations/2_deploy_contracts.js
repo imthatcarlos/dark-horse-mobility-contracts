@@ -18,12 +18,12 @@ module.exports = function(deployer) {
     fs.writeFileSync(filePath, json, 'utf8');
 
     // write to src/ directory as well
-    const srcFilePath = path.join(__dirname, './../../mobility-marketplace/src/json/contracts.json');
+    const srcFilePath = path.join(__dirname, './../../dark-horse-mobility-marketplace/src/json/contracts.json');
     fs.writeFileSync(srcFilePath, json, 'utf8');
 
     // write contract abi
     fs.writeFileSync(
-      path.join(__dirname, './../../mobility-marketplace/src/json/MobilityCampaigns.json'),
+      path.join(__dirname, './../../dark-horse-mobility-marketplace/src/json/MobilityCampaigns.json'),
       JSON.stringify(require('../build/contracts/MobilityCampaigns')),
       'utf8'
     );
