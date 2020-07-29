@@ -124,6 +124,14 @@ contract MobilityCampaigns {
     return dataProviders[_a];
   }
 
+  function enableNewUser() external {
+    campaignReceivers[msg.sender] = true;
+    dataProviders[msg.sender] = true;
+
+    totalCampaignReceivers = totalCampaignReceivers + 1;
+    totalDataProviders = totalDataProviders + 1;
+  }
+
   function toggleReceiveCampaign(bool _shouldReceive) external {
     require(campaignReceivers[msg.sender] != _shouldReceive, 'option for _shouldReceive already set');
     campaignReceivers[msg.sender] = _shouldReceive;
