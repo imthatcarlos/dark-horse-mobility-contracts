@@ -21,6 +21,7 @@ contract MobilityCampaigns {
     string category;
     string title;
     string ipfsHash;
+    string key;
     uint budgetWei;
     uint createdAt;          // datetime created
     uint expiresAt;          // datetime when no longer valid
@@ -34,7 +35,6 @@ contract MobilityCampaigns {
   mapping(address => bool) public dataProviders; // mapping of accounts that share data
   mapping(address => bool) public campaignReceivers; // mapping of accounts that receive campaigns
   mapping(address => uint) public activeCampaignOwners; // mapping of accounts that own campaigns (idx to activeCampaigns)
-  mapping(uint => address[]) private campaignPayouts; // mapping of accounts that receive campaigns
 
   uint public totalCampaignReceivers;
   uint public totalDataProviders;
@@ -76,6 +76,7 @@ contract MobilityCampaigns {
       category: '',
       title: '',
       ipfsHash: '',
+      key: '',
       budgetWei: 0,
       createdAt: 0,
       expiresAt: 0,
@@ -96,7 +97,8 @@ contract MobilityCampaigns {
     string memory _organization,
     string memory _category,
     string memory _title,
-    string memory _ipfsHash
+    string memory _ipfsHash,
+    string memory _key
   ) public
     payable
     noActiveCampaign
@@ -112,7 +114,8 @@ contract MobilityCampaigns {
       _organization,
       _category,
       _title,
-      _ipfsHash
+      _ipfsHash,
+      _key
     );
   }
 
@@ -152,6 +155,16 @@ contract MobilityCampaigns {
     }
   }
 
+  // return active campaign id for owners
+  function getActiveCampaignId()
+    external
+    view
+    onlyActiveCampaignOwners
+    returns(uint)
+  {
+    return activeCampaignOwners[msg.sender];
+  }
+
   // return active campaign for owners
   function getActiveCampaign()
     external
@@ -175,48 +188,13 @@ contract MobilityCampaigns {
     createdAt = campaign.createdAt;
   }
 
-  /*
-   * @TODO: _payouts param is set from indexer reading trips where campaign.createdAt < trip.endAt < campaign.expiredAt
-   */
-  function completeCampaign(address[] calldata _payouts)
+  function completeCampaign()
     external
     onlyActiveCampaignOwners
-    returns (uint)
   {
-    require(_payouts.length > 0, 'array param _payouts cannot be empty');
-
-    campaignPayouts[activeCampaignOwners[msg.sender]] = _payouts;
-    campaigns[activeCampaignOwners[msg.sender]].isActive = false;
+    _removeActiveCampaignAt(activeCampaignOwners[msg.sender]);
 
     emit CampaignCompleted(msg.sender, activeCampaignOwners[msg.sender]);
-
-    return activeCampaignOwners[msg.sender];
-  }
-
-  function setCampaignResultsThread(uint _id, string memory _thread)
-    public
-    onlyGraphIndexer
-  {
-    // sanity check
-    require(campaigns[_id].isActive == false, 'campaign must be completed');
-    require(bytes(campaigns[_id].campaignThreadId).length == 0, 'campaignThreadId must not be already set');
-
-    campaigns[_id].campaignThreadId = _thread;
-
-    emit CampaignResultsReleased(_id, _thread);
-  }
-
-  function getCampaignResults(uint _id)
-    external
-    view
-    returns (string memory)
-  {
-    Campaign storage campaign = campaigns[_id];
-
-    require(campaign.creator == msg.sender, 'only campaign owner can view results');
-    require(campaign.isActive == false, 'campaign must be completed');
-
-    return campaign.campaignThreadId;
   }
 
   // return active campaign ids for receivers
@@ -239,7 +217,8 @@ contract MobilityCampaigns {
       string memory organization,
       string memory category,
       string memory title,
-      string memory ipfsHash
+      string memory ipfsHash,
+      string memory key
     )
   {
     Campaign storage campaign = campaigns[_id];
@@ -247,6 +226,7 @@ contract MobilityCampaigns {
     category = campaign.category;
     title = campaign.title;
     ipfsHash = campaign.ipfsHash;
+    key = campaign.key;
   }
 
   // return active campaigns
@@ -275,7 +255,8 @@ contract MobilityCampaigns {
     string memory _organization,
     string memory _category,
     string memory _title,
-    string memory _ipfsHash
+    string memory _ipfsHash,
+    string memory _key
   )
     internal
   {
@@ -286,6 +267,7 @@ contract MobilityCampaigns {
       category: _category,
       title: _title,
       ipfsHash: _ipfsHash,
+      key: _key,
       budgetWei: msg.value,
       createdAt: block.timestamp, // solium-disable-line security/no-block-members, whitespace
       expiresAt: 0, // @TODO:
@@ -299,7 +281,7 @@ contract MobilityCampaigns {
   }
 
   // make a campaign inactive
-  function _removeActiveCampaignAt(uint _idx) internal returns(bool) {
+  function _removeActiveCampaignAt(uint _idx) internal {
     require(_idx < activeCampaigns.length, 'out of range exception - _idx');
     require(activeCampaigns[_idx] < campaigns.length, 'out of range exception - activeCampaigns[_idx]');
     require(campaigns[activeCampaigns[_idx]].isActive == true, 'campaign must be active');
@@ -307,7 +289,5 @@ contract MobilityCampaigns {
     campaigns[activeCampaigns[_idx]].isActive = false;
     activeCampaigns[_idx] = activeCampaigns[activeCampaigns.length - 1];
     delete activeCampaigns[activeCampaigns.length - 1];
-
-    return true;
   }
 }
