@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 pragma solidity ^0.6.0;
 
 import '@openzeppelin/contracts/math/SafeMath.sol';
@@ -11,9 +13,8 @@ import '@openzeppelin/contracts/math/SafeMath.sol';
 contract MobilityCampaigns {
   using SafeMath for uint256;
 
-  event CampaignCreated(address indexed owner, string indexed organization, string title);
+  event CampaignCreated(address indexed owner, string indexed organization, string title, uint newTotalRewardsWei);
   event CampaignCompleted(address owner, uint indexed campaignId);
-  event CampaignResultsReleased(uint indexed campaignId, string threadId);
 
   struct Campaign {
     address creator;      // the address of the creator
@@ -23,21 +24,35 @@ contract MobilityCampaigns {
     string ipfsHash;
     string key;
     uint budgetWei;
-    uint createdAt;          // datetime created
-    uint expiresAt;          // datetime when no longer valid
-    bool isActive;           // set to false when no longer active
-    string campaignThreadId; // results of campaign only accessible to the creator
+    uint createdAt;                // datetime created
+    uint expiresAt;                // datetime when no longer valid
+    bool isActive;                 // set to false when no longer active
+    uint currentCampaignReceivers; // how many users receiving ads at time of creation
+    uint currentRewardsWei;        // how much wei for rewards at time of creation (excluding this one)
+  }
+
+  struct RewardOwner {
+    address owner;
+    uint enabledAt;
+    uint enabledAtCampaignIdx;    // fetch all campaigns > this idx
+    uint lastRewardAtCampaignIdx;
+    uint lastRewardWei;
+    uint totalRewardsWei;
   }
 
   address public graphIndexer;
   uint[] private activeCampaigns;
   Campaign[] private campaigns;
+  RewardOwner[] private rewardOwners;
+
   mapping(address => bool) public dataProviders; // mapping of accounts that share data
-  mapping(address => bool) public campaignReceivers; // mapping of accounts that receive campaigns
+  mapping(address => uint) public campaignReceivers; // mapping of accounts that receive campaigns to their rewards data
   mapping(address => uint) public activeCampaignOwners; // mapping of accounts that own campaigns (idx to activeCampaigns)
 
+  uint public MIN_REWARDS_WITHDRAW_WEI = 150000000000000000; // 0.15 ETH
   uint public totalCampaignReceivers;
   uint public totalDataProviders;
+  uint public totalRewardsWei;
 
   modifier onlyGraphIndexer() {
     require(msg.sender == graphIndexer, 'msg.sender must be graphIndexer');
@@ -45,7 +60,7 @@ contract MobilityCampaigns {
   }
 
   modifier onlyCampaignReceivers() {
-    require(campaignReceivers[msg.sender] == true, 'account must have approved to receive campaigns');
+    require(campaignReceivers[msg.sender] > 0, 'account must have approved to receive campaigns');
     _;
   }
 
@@ -69,7 +84,7 @@ contract MobilityCampaigns {
     totalCampaignReceivers = 0;
     totalDataProviders = 0;
 
-    // take care of zero-index for storage array
+    // take care of zero-index for storage arrays
     campaigns.push(Campaign({
       creator: address(0),
       organization: '',
@@ -81,7 +96,17 @@ contract MobilityCampaigns {
       createdAt: 0,
       expiresAt: 0,
       isActive: false,
-      campaignThreadId: ''
+      currentCampaignReceivers: 0,
+      currentRewardsWei: 0
+    }));
+
+    rewardOwners.push(RewardOwner({
+      owner: address(0),
+      enabledAt: 0,
+      enabledAtCampaignIdx: 0,
+      lastRewardAtCampaignIdx: 0,
+      lastRewardWei: 0,
+      totalRewardsWei: 0
     }));
   }
 
@@ -106,7 +131,6 @@ contract MobilityCampaigns {
     // assert budget
     require(msg.value > 0, 'value must be greater than 0');
 
-    // @TODO: allocate budget accordingly
     // @TODO: set expiredAt
 
     // create record in storage, update lookup arrays
@@ -120,7 +144,7 @@ contract MobilityCampaigns {
   }
 
   function getReceiveCampaign(address _a) public view returns (bool) {
-    return campaignReceivers[_a];
+    return campaignReceivers[_a] > 0;
   }
 
   function getProvideData(address _a) public view returns (bool) {
@@ -128,31 +152,31 @@ contract MobilityCampaigns {
   }
 
   function enableNewUser() external {
-    campaignReceivers[msg.sender] = true;
+    // sanity check
+    require(campaignReceivers[msg.sender] == 0, 'user already registered');
+
+    // add to storage and lookup
+    rewardOwners.push(RewardOwner({
+      owner: msg.sender,
+      enabledAt: block.timestamp,
+      enabledAtCampaignIdx: (campaigns.length - 1), // [bogus, real, real2]
+      lastRewardAtCampaignIdx: 0,
+      lastRewardWei: 0,
+      totalRewardsWei: 0
+    }));
+
+    campaignReceivers[msg.sender] = rewardOwners.length - 1;
     dataProviders[msg.sender] = true;
 
     totalCampaignReceivers = totalCampaignReceivers + 1;
     totalDataProviders = totalDataProviders + 1;
   }
 
-  function toggleReceiveCampaign(bool _shouldReceive) external {
-    require(campaignReceivers[msg.sender] != _shouldReceive, 'option for _shouldReceive already set');
-    campaignReceivers[msg.sender] = _shouldReceive;
-    if (_shouldReceive) {
-      totalCampaignReceivers = totalCampaignReceivers + 1;
-    } else {
-      totalCampaignReceivers = totalCampaignReceivers - 1;
-    }
-  }
+  function disableUser() external {
+    // sanity check
+    require(campaignReceivers[msg.sender] > 0, 'user not registered');
 
-  function toggleProvideData(bool _shouldProvide) external {
-    require(dataProviders[msg.sender] != _shouldProvide, 'option for _shouldProvide already set');
-    dataProviders[msg.sender] = _shouldProvide;
-    if (_shouldProvide) {
-      totalDataProviders = totalDataProviders + 1;
-    } else {
-      totalDataProviders = totalDataProviders - 1;
-    }
+    _removeRewardOwnerAt(campaignReceivers[msg.sender]);
   }
 
   // return active campaign id for owners
@@ -248,6 +272,38 @@ contract MobilityCampaigns {
     createdAt = campaign.createdAt;
   }
 
+  // allows users to withdraw their rewards based on the number of campaigns that have occurred
+  // https://uploads-ssl.webflow.com/5ad71ffeb79acc67c8bcdaba/5ad8d1193a40977462982470_scalable-reward-distribution-paper.pdf
+  function withdrawRewards() external onlyCampaignReceivers {
+    RewardOwner storage rewardOwner = rewardOwners[campaignReceivers[msg.sender]];
+
+    uint prevIdx;
+    uint currentIdx = campaigns.length - 1;
+    if (rewardOwner.lastRewardAtCampaignIdx == 0) {
+      prevIdx = rewardOwner.enabledAtCampaignIdx;
+    } else {
+      prevIdx = rewardOwner.lastRewardAtCampaignIdx;
+    }
+
+    Campaign storage campaignI = campaigns[prevIdx];
+    Campaign storage campaignJ = campaigns[currentIdx];
+
+    // new rewards added since last time this account withdrew
+    uint totalWei = campaignJ.currentRewardsWei - campaignI.currentRewardsWei;
+    // * NOTE: we first multiply by 10e18 so to retain precision, and later divide by 10e18 to get the real value
+    uint weight = ((currentIdx - rewardOwner.enabledAtCampaignIdx) * 10**18) / currentIdx;
+    uint rWei = (totalWei * weight) / 10**18;
+
+    // enforce a min before being able to withdraw (save gas)
+    require(rWei > MIN_REWARDS_WITHDRAW_WEI, 'minimum to withdraw not met');
+
+    rewardOwner.lastRewardAtCampaignIdx = currentIdx;
+    rewardOwner.lastRewardWei = rWei;
+    rewardOwner.totalRewardsWei = rewardOwner.totalRewardsWei + rWei;
+
+    msg.sender.transfer(rWei);
+  }
+
   /**
    * Creates a record for the token exchange
    */
@@ -272,12 +328,17 @@ contract MobilityCampaigns {
       createdAt: block.timestamp, // solium-disable-line security/no-block-members, whitespace
       expiresAt: 0, // @TODO:
       isActive: true,
-      campaignThreadId: ''
+      currentCampaignReceivers: totalCampaignReceivers,
+      currentRewardsWei: totalRewardsWei
     }));
+
     activeCampaigns.push(campaigns.length - 1);
     activeCampaignOwners[msg.sender] = campaigns.length - 1;
 
-    emit CampaignCreated(msg.sender, _organization, _title);
+    // update total rewards
+    totalRewardsWei = totalRewardsWei + msg.value;
+
+    emit CampaignCreated(msg.sender, _organization, _title, totalRewardsWei);
   }
 
   // make a campaign inactive
@@ -289,5 +350,13 @@ contract MobilityCampaigns {
     campaigns[activeCampaigns[_idx]].isActive = false;
     activeCampaigns[_idx] = activeCampaigns[activeCampaigns.length - 1];
     delete activeCampaigns[activeCampaigns.length - 1];
+  }
+
+  // remove reward owner data from storage
+  function _removeRewardOwnerAt(uint _idx) internal {
+    require(_idx < rewardOwners.length, 'out of range exception - _idx');
+
+    rewardOwners[_idx] = rewardOwners[rewardOwners.length - 1];
+    delete rewardOwners[rewardOwners.length - 1];
   }
 }
