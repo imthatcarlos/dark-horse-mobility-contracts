@@ -159,7 +159,7 @@ contract MobilityCampaigns {
     rewardOwners.push(RewardOwner({
       owner: msg.sender,
       enabledAt: block.timestamp,
-      enabledAtCampaignIdx: (campaigns.length - 1), // [bogus, real, real2]
+      enabledAtCampaignIdx: (campaigns.length - 1), // [bogus, real]
       lastRewardAtCampaignIdx: 0,
       lastRewardWei: 0,
       totalRewardsWei: 0
@@ -285,17 +285,24 @@ contract MobilityCampaigns {
       prevIdx = rewardOwner.lastRewardAtCampaignIdx;
     }
 
+    require(currentIdx > rewardOwner.enabledAtCampaignIdx, 'cannot withdraw until at least 1 more campaign has been created');
+    require(currentIdx > prevIdx, 'cannot withdraw until at least 1 more campaign has been created');
+
     Campaign storage campaignI = campaigns[prevIdx];
     Campaign storage campaignJ = campaigns[currentIdx];
 
     // new rewards added since last time this account withdrew
-    uint totalWei = campaignJ.currentRewardsWei - campaignI.currentRewardsWei;
-    // * NOTE: we first multiply by 10e18 so to retain precision, and later divide by 10e18 to get the real value
-    uint weight = ((currentIdx - rewardOwner.enabledAtCampaignIdx) * 10**18) / currentIdx;
-    uint rWei = (totalWei * weight) / 10**18;
+    uint totalWei = (campaignJ.currentRewardsWei - campaignI.currentRewardsWei) / campaignJ.currentCampaignReceivers;
+
+    // NOTE: we first multiply by 10e8 so to retain precision, then later divide again
+    // NOTE: the multiplier logic is so that newcomers don't get all of the funds they COULD HAVE
+    //       this creates the situation where not all of the budget is used
+    // @TOOD: try to make this ETH recoverable or at least included in some other kind of pool
+    uint multiplier = ((currentIdx - rewardOwner.enabledAtCampaignIdx) * 10**8) / currentIdx;
+    uint rWei = (totalWei * multiplier) / 10**8;
 
     // enforce a min before being able to withdraw (save gas)
-    require(rWei > MIN_REWARDS_WITHDRAW_WEI, 'minimum to withdraw not met');
+    require(rWei >= MIN_REWARDS_WITHDRAW_WEI, 'minimum to withdraw not met');
 
     rewardOwner.lastRewardAtCampaignIdx = currentIdx;
     rewardOwner.lastRewardWei = rWei;
@@ -316,6 +323,9 @@ contract MobilityCampaigns {
   )
     internal
   {
+    // update total rewards
+    totalRewardsWei = totalRewardsWei + msg.value;
+
     // add to storage and lookup
     campaigns.push(Campaign({
       creator: msg.sender,
@@ -334,9 +344,6 @@ contract MobilityCampaigns {
 
     activeCampaigns.push(campaigns.length - 1);
     activeCampaignOwners[msg.sender] = campaigns.length - 1;
-
-    // update total rewards
-    totalRewardsWei = totalRewardsWei + msg.value;
 
     emit CampaignCreated(msg.sender, _organization, _title, totalRewardsWei);
   }
