@@ -13,11 +13,22 @@ import '@openzeppelin/contracts/math/SafeMath.sol';
 contract MobilityCampaigns {
   using SafeMath for uint256;
 
-  event CampaignCreated(address indexed owner, string indexed organization, string title, uint newTotalRewardsWei);
-  event CampaignCompleted(address owner, uint indexed campaignId);
+  event UserRegistered(address indexed account, uint enabledAt, uint enabledAtCampaignIdx);
+  event CampaignCreated(
+    address indexed creator,
+    string indexed organization,
+    string title,
+    string category,
+    uint createdAt,
+    uint budgetWei,
+    uint idx
+  );
+  event CampaignCompleted(address indexed creator, uint totalCampaignReceivers, uint refundWei, uint idx);
+  event UserRewardsWithdrawn(address indexed account, uint rewardsWei, uint totalRewardsWei, uint withdrewAt);
 
   struct Campaign {
     address creator;      // the address of the creator
+    uint idx;             // storage idx
     string organization;
     string category;
     string title;
@@ -29,6 +40,7 @@ contract MobilityCampaigns {
     bool isActive;                 // set to false when no longer active
     uint currentCampaignReceivers; // how many users receiving ads at time of creation
     uint currentRewardsWei;        // how much wei for rewards at time of creation (excluding this one)
+    uint currentClaimedWei;
   }
 
   struct RewardOwner {
@@ -49,10 +61,12 @@ contract MobilityCampaigns {
   mapping(address => uint) public campaignReceivers; // mapping of accounts that receive campaigns to their rewards data
   mapping(address => uint) public activeCampaignOwners; // mapping of accounts that own campaigns (idx to activeCampaigns)
 
+  uint public EXPIRES_IN_SECONDS = 1296000; // 15 min
   uint public MIN_REWARDS_WITHDRAW_WEI = 150000000000000000; // 0.15 ETH
   uint public totalCampaignReceivers;
   uint public totalDataProviders;
   uint public totalRewardsWei;
+  uint public rewardsWithdrawnWei;
 
   modifier onlyGraphIndexer() {
     require(msg.sender == graphIndexer, 'msg.sender must be graphIndexer');
@@ -97,7 +111,9 @@ contract MobilityCampaigns {
       expiresAt: 0,
       isActive: false,
       currentCampaignReceivers: 0,
-      currentRewardsWei: 0
+      currentRewardsWei: 0,
+      currentClaimedWei: 0,
+      idx: 0
     }));
 
     rewardOwners.push(RewardOwner({
@@ -134,12 +150,22 @@ contract MobilityCampaigns {
     // @TODO: set expiredAt
 
     // create record in storage, update lookup arrays
-    _createCampaignRecord(
+    uint idx = _createCampaignRecord(
       _organization,
       _category,
       _title,
       _ipfsHash,
       _key
+    );
+
+    emit CampaignCreated(
+      msg.sender,
+      _organization,
+      _title,
+      _category,
+      block.timestamp,
+      msg.value,
+      idx
     );
   }
 
@@ -200,7 +226,8 @@ contract MobilityCampaigns {
       string memory title,
       string memory ipfsHash,
       uint budgetWei,
-      uint createdAt
+      uint createdAt,
+      uint expiresAt
     )
   {
     Campaign storage campaign = campaigns[activeCampaignOwners[msg.sender]];
@@ -210,15 +237,36 @@ contract MobilityCampaigns {
     ipfsHash = campaign.ipfsHash;
     budgetWei = campaign.budgetWei;
     createdAt = campaign.createdAt;
+    expiresAt = campaign.expiresAt;
+  }
+
+  function calculateRefundedWei()
+    external
+    view
+    onlyActiveCampaignOwners
+    returns (uint)
+  {
+    return _calculateRefundedBudget();
   }
 
   function completeCampaign()
     external
     onlyActiveCampaignOwners
   {
-    _removeActiveCampaignAt(activeCampaignOwners[msg.sender]);
+    // sanity check
+    // require(campaigns[activeCampaignOwners[msg.sender]].expiresAt > block.timestamp, 'campaign not yet expired');
 
-    emit CampaignCompleted(msg.sender, activeCampaignOwners[msg.sender]);
+    uint idx = activeCampaignOwners[msg.sender];
+    uint refund = _calculateRefundedBudget();
+
+    _removeActiveCampaignAt(idx);
+
+    // @TODO: is this the right storage var to update?
+    totalRewardsWei = totalRewardsWei - refund;
+
+    msg.sender.transfer(refund);
+
+    emit CampaignCompleted(msg.sender, totalCampaignReceivers, refund, idx);
   }
 
   // return active campaign ids for receivers
@@ -253,23 +301,13 @@ contract MobilityCampaigns {
     key = campaign.key;
   }
 
-  // return active campaigns
-  function getCampaignsIndexer()
-    external
+  // return active campaign id for owners
+  function getIsCampaignActive(uint _idx)
+    public
     view
-    onlyGraphIndexer
-    returns(
-      string memory organization,
-      string memory category,
-      string memory title,
-      uint createdAt
-    )
+    returns(bool)
   {
-    Campaign storage campaign = campaigns[activeCampaigns[activeCampaignOwners[msg.sender]]];
-    organization = campaign.organization;
-    category = campaign.category;
-    title = campaign.title;
-    createdAt = campaign.createdAt;
+    return campaigns[_idx].isActive;
   }
 
   // allows users to withdraw their rewards based on the number of campaigns that have occurred
@@ -288,11 +326,10 @@ contract MobilityCampaigns {
     require(currentIdx > rewardOwner.enabledAtCampaignIdx, 'cannot withdraw until at least 1 more campaign has been created');
     require(currentIdx > prevIdx, 'cannot withdraw until at least 1 more campaign has been created');
 
-    Campaign storage campaignI = campaigns[prevIdx];
     Campaign storage campaignJ = campaigns[currentIdx];
 
     // new rewards added since last time this account withdrew
-    uint totalWei = (campaignJ.currentRewardsWei - campaignI.currentRewardsWei) / campaignJ.currentCampaignReceivers;
+    uint totalWei = (campaignJ.currentRewardsWei - campaigns[prevIdx].currentRewardsWei) / campaignJ.currentCampaignReceivers;
 
     // NOTE: we first multiply by 10e8 so to retain precision, then later divide again
     // NOTE: the multiplier logic is so that newcomers don't get all of the funds they COULD HAVE
@@ -304,11 +341,17 @@ contract MobilityCampaigns {
     // enforce a min before being able to withdraw (save gas)
     require(rWei >= MIN_REWARDS_WITHDRAW_WEI, 'minimum to withdraw not met');
 
+    // enforce a min before being able to withdraw (save gas)
+    require(rWei <= address(this).balance, 'NOT ENOUGH CONTRACT FUNDS');
+
     rewardOwner.lastRewardAtCampaignIdx = currentIdx;
     rewardOwner.lastRewardWei = rWei;
     rewardOwner.totalRewardsWei = rewardOwner.totalRewardsWei + rWei;
+    rewardsWithdrawnWei = rewardsWithdrawnWei + rWei;
 
     msg.sender.transfer(rWei);
+
+    emit UserRewardsWithdrawn(msg.sender, rWei, rewardOwner.totalRewardsWei, block.timestamp);
   }
 
   /**
@@ -322,9 +365,12 @@ contract MobilityCampaigns {
     string memory _key
   )
     internal
+    returns (uint)
   {
     // update total rewards
     totalRewardsWei = totalRewardsWei + msg.value;
+
+    uint newIdx = campaigns.length;
 
     // add to storage and lookup
     campaigns.push(Campaign({
@@ -335,17 +381,19 @@ contract MobilityCampaigns {
       ipfsHash: _ipfsHash,
       key: _key,
       budgetWei: msg.value,
-      createdAt: block.timestamp, // solium-disable-line security/no-block-members, whitespace
-      expiresAt: 0, // @TODO:
+      createdAt: block.timestamp,
+      expiresAt: (block.timestamp + EXPIRES_IN_SECONDS),
       isActive: true,
       currentCampaignReceivers: totalCampaignReceivers,
-      currentRewardsWei: totalRewardsWei
+      currentRewardsWei: totalRewardsWei,
+      currentClaimedWei: rewardsWithdrawnWei,
+      idx: newIdx
     }));
 
-    activeCampaigns.push(campaigns.length - 1);
-    activeCampaignOwners[msg.sender] = campaigns.length - 1;
+    activeCampaigns.push(newIdx);
+    activeCampaignOwners[msg.sender] = newIdx;
 
-    emit CampaignCreated(msg.sender, _organization, _title, totalRewardsWei);
+    return newIdx;
   }
 
   // make a campaign inactive
@@ -365,5 +413,21 @@ contract MobilityCampaigns {
 
     rewardOwners[_idx] = rewardOwners[rewardOwners.length - 1];
     delete rewardOwners[rewardOwners.length - 1];
+  }
+
+  function _calculateRefundedBudget() internal view returns(uint) {
+    Campaign storage campaignI = campaigns[activeCampaignOwners[msg.sender]];
+    Campaign storage campaignJ = campaigns[campaigns.length - 1];
+
+    uint rewardsAvailable = campaignJ.currentRewardsWei - campaignI.currentRewardsWei;
+
+    // no new rewards have been added OR claimed
+    if (rewardsAvailable == 0) {
+      return campaignJ.currentRewardsWei;
+    } else {
+      uint multiplier = campaignI.budgetWei / rewardsAvailable; // wei given relative to total available
+      uint diffClaimed = campaignJ.currentClaimedWei - campaignI.currentClaimedWei; // wei claimed in between
+      return (rewardsAvailable - diffClaimed) * multiplier;
+    }
   }
 }
