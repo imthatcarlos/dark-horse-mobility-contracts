@@ -182,10 +182,11 @@ contract MobilityCampaigns {
     require(campaignReceivers[msg.sender] == 0, 'user already registered');
 
     // add to storage and lookup
+    uint idx = campaigns.length - 1;
     rewardOwners.push(RewardOwner({
       owner: msg.sender,
       enabledAt: block.timestamp,
-      enabledAtCampaignIdx: (campaigns.length - 1), // [bogus, real]
+      enabledAtCampaignIdx: idx, // [bogus, real]
       lastRewardAtCampaignIdx: 0,
       lastRewardWei: 0,
       totalRewardsWei: 0
@@ -196,6 +197,8 @@ contract MobilityCampaigns {
 
     totalCampaignReceivers = totalCampaignReceivers + 1;
     totalDataProviders = totalDataProviders + 1;
+
+    emit UserRegistered(msg.sender, block.timestamp, idx);
   }
 
   function disableUser() external {
@@ -423,7 +426,7 @@ contract MobilityCampaigns {
 
     // no new rewards have been added OR claimed
     if (rewardsAvailable == 0) {
-      return campaignJ.currentRewardsWei;
+      return campaignJ.currentRewardsWei; // @TODO: maybe should be campaignI.budgetWei
     } else {
       uint multiplier = campaignI.budgetWei / rewardsAvailable; // wei given relative to total available
       uint diffClaimed = campaignJ.currentClaimedWei - campaignI.currentClaimedWei; // wei claimed in between
