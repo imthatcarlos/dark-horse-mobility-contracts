@@ -3,6 +3,7 @@
 pragma solidity ^0.6.0;
 
 import '@openzeppelin/contracts/math/SafeMath.sol';
+import '@openzeppelin/contracts/access/Ownable.sol';
 
 /**
  * @title Babylon
@@ -10,7 +11,7 @@ import '@openzeppelin/contracts/math/SafeMath.sol';
  * @dev This contract manages the exchange of hbz tokens for Babylonia tokens, with a locking period
  * in place before tokens can be claimed
  */
-contract MobilityCampaigns {
+contract MobilityCampaigns is Ownable {
   using SafeMath for uint256;
 
   event UserRegistered(address indexed account, uint enabledAt, uint enabledAtCampaignIdx);
@@ -25,6 +26,9 @@ contract MobilityCampaigns {
   );
   event CampaignCompleted(address indexed creator, uint totalCampaignReceivers, uint refundWei, uint idx);
   event UserRewardsWithdrawn(address indexed account, uint rewardsWei, uint totalRewardsWei, uint withdrewAt);
+
+  event CampaignBlacklisted(address indexed creator, uint campaign);
+  event CampaignFeatured(address indexed creator, uint campaign, uint rank);
 
   struct Campaign {
     address creator;      // the address of the creator
@@ -53,6 +57,7 @@ contract MobilityCampaigns {
   }
 
   address public graphIndexer;
+  address public adVotingDAO;
   uint[] private activeCampaigns;
   Campaign[] private campaigns;
   RewardOwner[] private rewardOwners;
@@ -60,6 +65,9 @@ contract MobilityCampaigns {
   mapping(address => bool) public dataProviders; // mapping of accounts that share data
   mapping(address => uint) public campaignReceivers; // mapping of accounts that receive campaigns to their rewards data
   mapping(address => uint) public activeCampaignOwners; // mapping of accounts that own campaigns (idx to activeCampaigns)
+
+  mapping(address => uint) public blacklistedCampaignCreators;
+  mapping(uint => uint) public featuredCampaigns;
 
   uint public EXPIRES_IN_SECONDS = 1296000; // 15 min
   uint public MIN_REWARDS_WITHDRAW_WEI = 150000000000000000; // 0.15 ETH
@@ -85,6 +93,16 @@ contract MobilityCampaigns {
 
   modifier noActiveCampaign() {
     require(activeCampaignOwners[msg.sender] == 0, 'account already has an active campaign');
+    _;
+  }
+
+  modifier onlyVotingDAO() {
+    require(msg.sender == adVotingDAO, 'msg.sender must be ad voting DAO');
+    _;
+  }
+
+  modifier notBlacklisted() {
+    require(blacklistedCampaignCreators[msg.sender] == 0, 'account must not have been blacklisted');
     _;
   }
 
@@ -142,6 +160,7 @@ contract MobilityCampaigns {
     string memory _key
   ) public
     payable
+    notBlacklisted
     noActiveCampaign
   {
     // assert budget
@@ -355,6 +374,42 @@ contract MobilityCampaigns {
     msg.sender.transfer(rWei);
 
     emit UserRewardsWithdrawn(msg.sender, rWei, rewardOwner.totalRewardsWei, block.timestamp);
+  }
+
+  function isCampaignReceiver(address _account) public view returns (bool) {
+    return campaignReceivers[_account] > 0;
+  }
+
+  function setAdVotingAddress(address _contract) public onlyOwner {
+    adVotingDAO = _contract;
+  }
+
+  function blacklistCampaignCreator(uint _id) public onlyVotingDAO {
+    Campaign storage campaign = campaigns[_id];
+
+    // blacklist the campaign creator
+    blacklistedCampaignCreators[campaign.creator] = _id;
+
+    // refund + close out the campaign
+    uint refund = _calculateRefundedBudget();
+
+    _removeActiveCampaignAt(_id);
+
+    activeCampaignOwners[campaign.creator] = 0;
+
+    totalRewardsWei = totalRewardsWei - refund;
+
+    payable(campaign.creator).transfer(refund);
+
+    emit CampaignBlacklisted(campaign.creator, _id);
+  }
+
+  function setFeaturedCampaign(uint _id, uint _rank) public onlyVotingDAO {
+    require(msg.sender == adVotingDAO, 'Error: only ad voting DAO');
+
+    featuredCampaigns[_id] = _rank;
+
+    emit CampaignFeatured(campaigns[_id].creator, _id, _rank);
   }
 
   /**

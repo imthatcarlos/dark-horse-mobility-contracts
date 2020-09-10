@@ -5,7 +5,7 @@ var path = require('path');
 
 module.exports = function(deployer) {
   var networkIdx = process.argv.indexOf('--network');
-  var network = networkIdx != -1 ? process.argv[networkIdx + 1] : 'development'
+  var network = networkIdx != -1 ? process.argv[networkIdx + 1] : 'localhost'
 
   var filePath = path.join(__dirname, './../contracts.json');
   var data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
