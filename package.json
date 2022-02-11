@@ -13,7 +13,7 @@
     "ganache": "ganache-cli -l 9500000 --account='0x3afcf49b0881264e2d9ebc629fe0cefac1c7f691d592d7ccf55180a213ac1491,0x10000000000000000000000'"
   },
   "devDependencies": {
-    "@openzeppelin/contracts": "^3.0.0-rc.1",
+    "@openzeppelin/contracts": "^4.4.2",
     "@truffle/hdwallet-provider": "^1.0.34",
     "chai": "^4.2.0",
     "chai-bignumber": "^3.0.0",
