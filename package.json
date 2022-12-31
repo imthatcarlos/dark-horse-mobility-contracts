@@ -14,7 +14,7 @@
   },
   "devDependencies": {
     "@openzeppelin/contracts": "^3.0.0-rc.1",
-    "@truffle/hdwallet-provider": "^1.0.34",
+    "@truffle/hdwallet-provider": "^1.7.0",
     "chai": "^4.2.0",
     "chai-bignumber": "^3.0.0",
     "ganache-cli": "^6.9.1"
